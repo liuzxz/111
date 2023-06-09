@@ -1,0 +1,1289 @@
+void CQuantyView3DView::Ondrill()
+{
+	// TODO: 在此添加命令处理程序代码
+	//连接数据库
+	CFileDialog dlg(TRUE,"mdb","*.mdb",OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT,
+		"MapInfoFile (*.mdb) |*.mdb|All Files (*.*)|*.*||",NULL);
+	if(dlg.DoModal()!=IDOK) return;
+
+	CString szDBPath = CString(dlg.GetPathName());	//szDBPath为数据库的路径
+	CString szConnection="Provider=Microsoft.Jet.OLEDB.4.0; Data Source=" + szDBPath + "; User ID=Admin";
+	ppDatabase =new gvado::CADODatabase;
+	if(ppDatabase->Open(szConnection))
+	{
+		AfxMessageBox("Succeed!");		
+	}
+
+
+
+
+
+	//在现图层构建钻孔形态模型
+	CGV3dLayer *p3dLayer = GetDocument()->m_Project.GetCurrentLayer();
+	if (!p3dLayer) return PromptError("请设置当前图层");
+	CGeoField *pField = NULL;
+	BOOL bModified = FALSE;
+
+	CADORecordset * pSubset_0202 = new CADORecordset(ppDatabase);
+	CADORecordset * pSubset_0401 = new CADORecordset(ppDatabase);
+	CADORecordset * pSubset_0402 = new CADORecordset(ppDatabase);
+	CADORecordset * pSubset_0406 = new CADORecordset(ppDatabase);
+	CADORecordset * pSubset_0406_INFO = new CADORecordset(ppDatabase);
+
+	
+	
+	//建模
+	CString m_SQL;
+	m_SQL.Format("select * from DMZK0401");
+	if(!pSubset_0401->Open(m_SQL,CADORecordset::openUnknown))
+		return;
+	while (!pSubset_0401->IsEOF())
+	{
+		CString block_ID;//勘探区编号
+		CString drill_ID;//钻孔编号
+		CString line_ID;//勘探线编号
+		double drill_SX;//X坐标
+		double drill_SY;//Y坐标
+		double drill_SZ;//Z坐标
+		double drill_ED;//终孔深度
+
+		pSubset_0401->GetFieldValue("MDBTAD（勘探区编号）", block_ID);
+		pSubset_0401->GetFieldValue("GCJCBN（钻孔编号）", drill_ID);
+		pSubset_0401->GetFieldValue("PKGDCA（勘探线编号）", line_ID);
+		pSubset_0401->GetFieldValue("TKCAF（X坐标）", drill_SX);
+		pSubset_0401->GetFieldValue("TKCAG（Y坐标）", drill_SY);
+		pSubset_0401->GetFieldValue("TKCAI（Z坐标）", drill_SZ);
+		pSubset_0401->GetFieldValue("GGHHAB（终孔深度）", drill_ED);
+		
+
+		POINT3d drill_SPoint;
+		drill_SPoint[0]=drill_SX;
+		drill_SPoint[1]=drill_SY;
+		drill_SPoint[2]=drill_SZ;
+		CGV3dPolyline *pLine=new CGV3dPolyline();
+		pLine->AddHead(drill_SPoint[0],drill_SPoint[1],drill_SPoint[2]);
+
+		POINT3d last_Point={drill_SPoint[0],drill_SPoint[1],drill_SPoint[2]};
+		double last_point_D=0;
+		double last_point_SKEW=0;
+		double last_point_ORIENTATION=0;
+
+		CString m_SQL2;
+		m_SQL2.Format("select * from DMZK0202 where [GCJCBN(钻孔编号)]=\'%s\' order by [WTHEBA(测点深度)] asc",drill_ID);
+		if(!pSubset_0202->Open(m_SQL2,CADORecordset::openUnknown))
+			return;
+		while (!pSubset_0202->IsEOF())
+		{
+			
+			int point_ID;
+			double point_D;
+			double point_SKEW=0;
+			double point_ORIENTATION=0;
+			pSubset_0202->GetFieldValue("WTJDIH(测点号)", point_ID);
+			pSubset_0202->GetFieldValue("WTHEBA(测点深度)", point_D);
+			pSubset_0202->GetFieldValue("WTHGFC(偏斜角采用值)", point_SKEW);
+			pSubset_0202->GetFieldValue("WTHGFF(方位角采用值)", point_ORIENTATION);
+			
+			if (point_D==0)
+			{
+				last_point_D=0;
+				last_point_ORIENTATION=point_ORIENTATION;
+				last_point_SKEW=point_SKEW;
+				pSubset_0202->MoveNext();
+				continue;
+			}
+
+			//计算测点坐标
+			double point_X=last_Point[0];
+			double point_Y=last_Point[1];
+			double point_Z=last_Point[2]-(point_D-last_point_D);
+
+			pLine->AddTail(point_X,point_Y,point_Z);
+
+			last_point_D=point_D;
+			last_point_ORIENTATION=point_ORIENTATION;
+			last_point_SKEW=point_SKEW;
+			last_Point[0]=point_X;
+			last_Point[1]=point_Y;
+			last_Point[2]=point_Z;
+			pSubset_0202->MoveNext();
+		}
+		//最后一个测点与钻孔末端间的最后一段
+		double point_X=last_Point[0];
+		double point_Y=last_Point[1];
+		double point_Z=last_Point[2]-(drill_ED-last_point_D);
+		pLine->AddTail(point_X,point_Y,point_Z);
+		pLine->SetWidth(3);
+		pLine->SetColor(255,0,0);
+		p3dLayer->AddObject(pLine);
+
+
+		//创建属性字段
+		CString temp;
+		pField = p3dLayer->GetField("勘探区编号");
+		bModified = FALSE;
+
+		if (!pField)
+		{
+			pField = new CGeoField("勘探区编号",GEO_STRING, 20,0,0);
+			p3dLayer->AddField(pField);	
+		}
+		temp.Format(block_ID);
+		pField->StrToVal(temp,p3dLayer->GetObjIndex(pLine));
+		temp.Empty();
+		/////
+		pField = p3dLayer->GetField("钻孔编号");
+		bModified = FALSE;
+
+		if (!pField)
+		{
+			pField = new CGeoField("钻孔编号",GEO_STRING, 20,0,0);
+			p3dLayer->AddField(pField);	
+		}
+		temp.Format(drill_ID);
+		pField->StrToVal(temp,p3dLayer->GetObjIndex(pLine));
+		temp.Empty();
+		/////
+		pField = p3dLayer->GetField("勘探线编号");
+		bModified = FALSE;
+
+		if (!pField)
+		{
+			pField = new CGeoField("勘探线编号",GEO_INT, sizeof(int),0,0);
+			p3dLayer->AddField(pField);	
+		}
+		temp.Format(line_ID);
+		pField->StrToVal(temp,p3dLayer->GetObjIndex(pLine));
+		temp.Empty();
+		/////
+
+		pField = p3dLayer->GetField("起点X坐标");
+		bModified = FALSE;
+		if (!pField)
+		{
+			pField = new CGeoField("起点X坐标",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+			p3dLayer->AddField(pField);	
+		}
+		temp.Format("%lf",drill_SX);
+		pField->StrToVal(temp,p3dLayer->GetObjIndex(pLine));
+		temp.Empty();
+		/////
+
+		pField = p3dLayer->GetField("起点Y坐标");
+		bModified = FALSE;
+		if (!pField)
+		{
+			pField = new CGeoField("起点Y坐标",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+			p3dLayer->AddField(pField);	
+		}
+		temp.Format("%lf",drill_SY);
+		pField->StrToVal(temp,p3dLayer->GetObjIndex(pLine));
+		temp.Empty();
+		/////
+
+		pField = p3dLayer->GetField("起点Z坐标");
+		bModified = FALSE;
+		if (!pField)
+		{
+			pField = new CGeoField("起点Z坐标",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+			p3dLayer->AddField(pField);	
+		}
+		temp.Format("%lf",drill_SZ);
+		pField->StrToVal(temp,p3dLayer->GetObjIndex(pLine));
+		temp.Empty();
+		/////
+
+		pField = p3dLayer->GetField("钻孔终深");
+		bModified = FALSE;
+		if (!pField)
+		{
+			pField = new CGeoField("钻孔终深",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+			p3dLayer->AddField(pField);	
+		}
+		temp.Format("%lf",drill_ED);
+		pField->StrToVal(temp,p3dLayer->GetObjIndex(pLine));
+		temp.Empty();
+		/////
+		pSubset_0401->MoveNext();
+	}
+
+	
+	//建立钻孔地层模型
+	//新建图层
+	CGV3dLayer* p3dLayer2=new CGV3dLayer;
+	p3dLayer2->SetName("钻孔地层模型");
+	CGV3dDocument *p3dDoc=GetDocument();
+	ASSERT(p3dDoc);
+	CGV3dProject* p3dPrj = &(p3dDoc->m_Project);
+	ASSERT(p3dPrj);
+	CGV3dMap* p3dMap = p3dPrj->GetCurrentMap();
+	p3dMap->AddLayer(p3dLayer2);
+	p3dPrj->SetCurrentLayer(p3dLayer2);
+
+	//重置表指针
+	pSubset_0202->Close();
+	pSubset_0401->Close();
+	pSubset_0202 = new CADORecordset(ppDatabase);
+	pSubset_0401 = new CADORecordset(ppDatabase);
+	
+	//画图
+	m_SQL.Format("select * from DMZK0401");
+	if(!pSubset_0401->Open(m_SQL,CADORecordset::openUnknown))
+		return;
+	while (!pSubset_0401->IsEOF())
+	{
+		CString block_ID;//勘探区编号
+		CString drill_ID;//钻孔编号
+		CString line_ID;//勘探线编号
+		double drill_SX;//X坐标
+		double drill_SY;//Y坐标
+		double drill_SZ;//Z坐标
+		double drill_ED;//终孔深度
+
+		pSubset_0401->GetFieldValue("MDBTAD（勘探区编号）", block_ID);
+		pSubset_0401->GetFieldValue("GCJCBN（钻孔编号）", drill_ID);
+		pSubset_0401->GetFieldValue("PKGDCA（勘探线编号）", line_ID);
+		pSubset_0401->GetFieldValue("TKCAF（X坐标）", drill_SX);
+		pSubset_0401->GetFieldValue("TKCAG（Y坐标）", drill_SY);
+		pSubset_0401->GetFieldValue("TKCAI（Z坐标）", drill_SZ);
+		pSubset_0401->GetFieldValue("GGHHAB（终孔深度）", drill_ED);
+
+
+		POINT3d drill_SPoint;
+		drill_SPoint[0]=drill_SX;
+		drill_SPoint[1]=drill_SY;
+		drill_SPoint[2]=drill_SZ;
+		CGV3dPolyline *pLine=new CGV3dPolyline();
+		CGV3dPolyhedron *pPolyhedron=new CGV3dPolyhedron();
+		pLine->AddHead(drill_SPoint[0],drill_SPoint[1],drill_SPoint[2]);
+
+		POINT3d last_Point={drill_SPoint[0],drill_SPoint[1],drill_SPoint[2]};
+		double last_point_D=0;
+		double last_point_SKEW=0;
+		double last_point_ORIENTATION=0;
+
+		CString m_SQL2;
+		m_SQL2.Format("select * from DMZK0202 where [GCJCBN(钻孔编号)]=\'%s\' order by [WTHEBA(测点深度)] asc",drill_ID);
+		if(!pSubset_0202->Open(m_SQL2,CADORecordset::openUnknown))
+			return;
+		CString m_SQL3;
+		m_SQL3.Format("select * from DMZK0402 where [GCJCBN(钻孔编号)]=\'%s\' order by [TKACCM(岩石分层孔深)] asc",drill_ID);
+		if(!pSubset_0402->Open(m_SQL3,CADORecordset::openUnknown))
+			return;
+		int color=50;
+		int turn=1;
+		while (!pSubset_0202->IsEOF()&&(!pSubset_0402->IsEOF()))
+		{
+			//钻孔测斜数据
+			double point_ID;
+			double point_D;
+			double point_SKEW=0;
+			double point_ORIENTATION=0;
+			pSubset_0202->GetFieldValue("WTJDIH(测点号)", point_ID);//没读进去！！！！！！！
+			pSubset_0202->GetFieldValue("WTHEBA(测点深度)", point_D);
+			pSubset_0202->GetFieldValue("WTHGFC(偏斜角采用值)", point_SKEW);
+			pSubset_0202->GetFieldValue("WTHGFF(方位角采用值)", point_ORIENTATION);
+			
+			//钻孔分层数据
+			double stratum_D;
+			CString stratum_NAME;
+			double stratum_INCLINATION;
+			pSubset_0402->GetFieldValue("TKACCM(岩石分层孔深)",stratum_D);
+			pSubset_0402->GetFieldValue("YSEBZ(岩石全名)",stratum_NAME);
+			pSubset_0402->GetFieldValue("GCJLIJ(岩层倾角)",stratum_INCLINATION);
+
+
+			if (point_D==0)
+			{
+				last_point_D=0;
+				last_point_ORIENTATION=point_ORIENTATION;
+				last_point_SKEW=point_SKEW;
+				pSubset_0202->MoveNext();
+				continue;
+			}
+			
+			//计算测点坐标
+			double point_X=last_Point[0];
+			double point_Y=last_Point[1];
+			double point_Z=last_Point[2]-(point_D-last_point_D);
+
+			//检测是否要分层
+			if (stratum_D<=point_D&&stratum_D>last_point_D)
+			{
+				double stratum_X=last_Point[0];
+				double stratum_Y=last_Point[1];
+				double stratum_Z=last_Point[2]-(stratum_D-last_point_D);
+
+				pLine->AddTail(stratum_X,stratum_Y,stratum_Z);
+				pLine->SetColor(0,color,color);
+				p3dLayer2->AddObject(pLine);
+				pPolyhedron=CreatePolyhedron(pLine,10);
+				if (turn==1)
+				{
+					pPolyhedron->SetColor(255,0,0);
+				}
+				else if(turn==2)
+				{
+					pPolyhedron->SetColor(255,255,0);
+				}
+				else if(turn==3)
+				{
+					pPolyhedron->SetColor(0,255,0);
+				}
+				else if(turn==4)
+				{
+					pPolyhedron->SetColor(255,250,250);
+				}
+				else if(turn==5)
+				{
+					pPolyhedron->SetColor(255,0,255);
+				}
+				else if(turn==6)
+				{
+					pPolyhedron->SetColor(255,165,0);
+				}
+				turn++;
+				p3dLayer2->AddObject(pPolyhedron);
+				
+				
+				//添加字段
+				CString temp;
+
+
+				pField = p3dLayer2->GetField("钻孔编号");
+				bModified = FALSE;
+
+				if (!pField)
+				{
+					pField = new CGeoField("钻孔编号",GEO_STRING, 20,0,0);
+					p3dLayer2->AddField(pField);	
+				}
+				temp.Format(drill_ID);
+				pField->StrToVal(temp,p3dLayer2->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer2->GetObjIndex(pPolyhedron));
+				temp.Empty();
+				/////
+				pField = p3dLayer2->GetField("岩石全名");
+				bModified = FALSE;
+
+				if (!pField)
+				{
+					pField = new CGeoField("岩石全名",GEO_STRING, 20,0,0);
+					p3dLayer2->AddField(pField);	
+				}
+				temp.Format(stratum_NAME);
+				pField->StrToVal(temp,p3dLayer2->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer2->GetObjIndex(pPolyhedron));
+				temp.Empty();
+				/////
+
+				pField = p3dLayer2->GetField("岩层倾角");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("岩层倾角",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer2->AddField(pField);	
+				}
+				temp.Format("%lf",stratum_INCLINATION);
+				pField->StrToVal(temp,p3dLayer2->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer2->GetObjIndex(pPolyhedron));
+				temp.Empty();
+			
+
+				pField = p3dLayer2->GetField("下分层深度");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("下分层深度",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer2->AddField(pField);	
+				}
+				temp.Format("%lf",stratum_D);
+				pField->StrToVal(temp,p3dLayer2->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer2->GetObjIndex(pPolyhedron));
+				temp.Empty();
+				//
+				pLine=new CGV3dPolyline;
+				pLine->AddTail(stratum_X,stratum_Y,stratum_Z);
+				last_Point[0]=stratum_X;
+				last_Point[1]=stratum_Y;
+				last_Point[2]=stratum_Z;
+				last_point_D=stratum_D;
+				pSubset_0402->MoveNext();
+				continue;
+			}
+
+			pLine->AddTail(point_X,point_Y,point_Z);
+
+			last_point_D=point_D;
+			last_point_ORIENTATION=point_ORIENTATION;
+			last_point_SKEW=point_SKEW;
+			last_Point[0]=point_X;
+			last_Point[1]=point_Y;
+			last_Point[2]=point_Z;
+			pSubset_0202->MoveNext();
+
+
+		}
+		
+
+
+
+		//最后一个测点与钻孔末端间的最后一段
+		double point_X=last_Point[0];
+		double point_Y=last_Point[1];
+		double point_Z=last_Point[2]-(drill_ED-last_point_D);
+		pLine->AddTail(point_X,point_Y,point_Z);
+		pLine->SetColor(0,color,color);
+		p3dLayer2->AddObject(pLine);
+		//pPolyhedron=CreatePolyhedron(pLine,10);
+		//pPolyhedron->SetColor(color);
+		//p3dLayer2->AddObject(pPolyhedron);
+		//CString temp;
+
+		//pField = p3dLayer2->GetField("钻孔编号");
+		//bModified = FALSE;
+
+		//if (!pField)
+		//{
+		//	pField = new CGeoField("钻孔编号",GEO_STRING, 20,0,0);
+		//	p3dLayer2->AddField(pField);	
+		//}
+		//temp.Format(drill_ID);
+		//pField->StrToVal(temp,p3dLayer2->GetObjIndex(pLine));
+		//pField->StrToVal(temp,p3dLayer2->GetObjIndex(pPolyhedron));
+		//temp.Empty();
+		///////
+		//pField = p3dLayer2->GetField("岩石全名");
+		//bModified = FALSE;
+
+		//if (!pField)
+		//{
+		//	pField = new CGeoField("岩石全名",GEO_STRING, 20,0,0);
+		//	p3dLayer2->AddField(pField);	
+		//}
+		//temp.Format("未知");
+		//pField->StrToVal(temp,p3dLayer2->GetObjIndex(pLine));
+		//pField->StrToVal(temp,p3dLayer2->GetObjIndex(pPolyhedron));
+		//temp.Empty();
+		///////
+
+		//pField = p3dLayer2->GetField("岩层倾角");
+		//bModified = FALSE;
+		//if (!pField)
+		//{
+		//	pField = new CGeoField("岩层倾角",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+		//	p3dLayer2->AddField(pField);	
+		//}
+		//temp.Format("%lf",-1);
+		//pField->StrToVal(temp,p3dLayer2->GetObjIndex(pLine));
+		//pField->StrToVal(temp,p3dLayer2->GetObjIndex(pPolyhedron));
+		//temp.Empty();
+
+
+		//pField = p3dLayer2->GetField("下分层深度");
+		//bModified = FALSE;
+		//if (!pField)
+		//{
+		//	pField = new CGeoField("下分层深度",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+		//	p3dLayer2->AddField(pField);	
+		//}
+		//temp.Format("%lf",-1);
+		//pField->StrToVal(temp,p3dLayer2->GetObjIndex(pLine));
+		//pField->StrToVal(temp,p3dLayer2->GetObjIndex(pPolyhedron));
+		//temp.Empty();
+		pSubset_0401->MoveNext();
+	}
+
+	////建立样品模型
+	//重置指针
+	pSubset_0202->Close();
+	pSubset_0401->Close();
+	pSubset_0402->Close();
+	pSubset_0202 = new CADORecordset(ppDatabase);
+	pSubset_0401 = new CADORecordset(ppDatabase);
+	//新建图层
+	CGV3dLayer* p3dLayer3=new CGV3dLayer;
+	p3dLayer3->SetName("样品模型");
+	//CGV3dDocument *p3dDoc=GetDocument();
+	//ASSERT(p3dDoc);
+	//CGV3dProject* p3dPrj = &(p3dDoc->m_Project);
+	//ASSERT(p3dPrj);
+	//CGV3dMap* p3dMap = p3dPrj->GetCurrentMap();
+	p3dMap->AddLayer(p3dLayer3);
+	p3dPrj->SetCurrentLayer(p3dLayer3);
+
+	//建模
+	m_SQL.Format("select * from DMZK0401");
+	if(!pSubset_0401->Open(m_SQL,CADORecordset::openUnknown))
+		return;
+	while (!pSubset_0401->IsEOF())
+	{
+		CString block_ID;//勘探区编号
+		CString drill_ID;//钻孔编号
+		CString line_ID;//勘探线编号
+		double drill_SX;//X坐标
+		double drill_SY;//Y坐标
+		double drill_SZ;//Z坐标
+		double drill_ED;//终孔深度
+
+		pSubset_0401->GetFieldValue("MDBTAD（勘探区编号）", block_ID);
+		pSubset_0401->GetFieldValue("GCJCBN（钻孔编号）", drill_ID);
+		pSubset_0401->GetFieldValue("PKGDCA（勘探线编号）", line_ID);
+		pSubset_0401->GetFieldValue("TKCAF（X坐标）", drill_SX);
+		pSubset_0401->GetFieldValue("TKCAG（Y坐标）", drill_SY);
+		pSubset_0401->GetFieldValue("TKCAI（Z坐标）", drill_SZ);
+		pSubset_0401->GetFieldValue("GGHHAB（终孔深度）", drill_ED);
+
+
+		POINT3d drill_SPoint;
+		drill_SPoint[0]=drill_SX;
+		drill_SPoint[1]=drill_SY;
+		drill_SPoint[2]=drill_SZ;
+		CGV3dPolyline *pLine;
+		CGV3dPolyhedron *pPolyhedron;
+		//pLine->AddHead(drill_SPoint[0],drill_SPoint[1],drill_SPoint[2]);
+
+		POINT3d last_Point={drill_SPoint[0],drill_SPoint[1],drill_SPoint[2]};
+		double last_point_D=0;
+		double last_point_SKEW=0;
+		double last_point_ORIENTATION=0;
+
+		CString m_SQL2;
+		m_SQL2.Format("select * from DMZK0202 where [GCJCBN(钻孔编号)]=\'%s\' order by [WTHEBA(测点深度)] asc",drill_ID);
+		//m_SQL2.Format("select * from DMZK0202 where [GCJCBN(钻孔编号)]=\'JZK1306\' order by [WTHEBA(测点深度)] asc");
+		if(!pSubset_0202->Open(m_SQL2,CADORecordset::openUnknown))
+			return;
+
+		CString m_SQL3;
+		m_SQL3.Format("select * from [DMZK0406-INFO] where [GCJCBN（钻孔编号）]=\'%s\' order by [TKACCF（样品起始深度）] asc",drill_ID);
+		//m_SQL3.Format("select * from [DMZK0406-INFO] where [GCJCBN（钻孔编号）]=\'JZK1306\' order by [TKACCF（样品起始深度）] asc");
+		if(!pSubset_0406_INFO->Open(m_SQL3,CADORecordset::openUnknown))
+			return;
+
+		while (!pSubset_0202->IsEOF()&&(!pSubset_0406_INFO->IsEOF()))
+		{
+			//读测斜表
+			int point_ID;
+			double point_D;
+			double point_SKEW=0;
+			double point_ORIENTATION=0;
+			pSubset_0202->GetFieldValue("WTJDIH(测点号)", point_ID);
+			pSubset_0202->GetFieldValue("WTHEBA(测点深度)", point_D);
+			pSubset_0202->GetFieldValue("WTHGFC(偏斜角采用值)", point_SKEW);
+			pSubset_0202->GetFieldValue("WTHGFF(方位角采用值)", point_ORIENTATION);
+			//读样品表
+			CString sample_ID;
+			double sample_SD;
+			double sample_ED;
+			double sample_L;
+			double sample_Cu=0;
+			double sample_Zn=0;
+			double sample_S=0;
+			pSubset_0406_INFO->GetFieldValue("PKHFB（样品编号）",sample_ID);
+			pSubset_0406_INFO->GetFieldValue("TKACCF（样品起始深度）",sample_SD);
+			pSubset_0406_INFO->GetFieldValue("TKACCG（样品终止深度）",sample_ED);
+			pSubset_0406_INFO->GetFieldValue("GCLCAA（样品长度）",sample_L);
+			pSubset_0406_INFO->GetFieldValue("HXD001（铜品位）",sample_Cu);
+			pSubset_0406_INFO->GetFieldValue("HXD002（锌品位）",sample_Zn);
+			pSubset_0406_INFO->GetFieldValue("HXD003（硫品位）",sample_S);
+
+			if (point_D==0)
+			{
+				last_point_D=0;
+				last_point_ORIENTATION=point_ORIENTATION;
+				last_point_SKEW=point_SKEW;
+				pSubset_0202->MoveNext();
+				continue;
+			}
+			//计算测点坐标
+			double point_X=last_Point[0];
+			double point_Y=last_Point[1];
+			double point_Z=last_Point[2]-(point_D-last_point_D);
+			//判断样品段起点是否在该测点与上一测点之间
+			if (last_point_D<sample_SD&&sample_SD<=point_D)
+			{
+				pLine=new CGV3dPolyline();
+				double sample_SX=last_Point[0];
+				double sample_SY=last_Point[1];
+				double sample_SZ=last_Point[2]-(sample_SD-last_point_D);
+				pLine->AddHead(sample_SX,sample_SY,sample_SZ);
+			}
+			//判断是否在样品段之间
+			if (point_D>sample_SD&&point_D<=sample_ED)
+			{
+				pLine->AddTail(point_X,point_Y,point_Z);
+			}
+			//判断样品段终点是否在该测点与上一测点之间
+			if (last_point_D<sample_ED&&sample_ED<=point_D)
+			{
+				double sample_EX=last_Point[0];
+				double sample_EY=last_Point[1];
+				double sample_EZ=last_Point[2]-(sample_ED-last_point_D);
+				pLine->AddTail(sample_EX,sample_EY,sample_EZ);
+				pLine->SetWidth(3);
+				pLine->SetColor(0,255,0);
+				p3dLayer3->AddObject(pLine);
+				pPolyhedron=CreatePolyhedron(pLine,8);
+				pPolyhedron->SetColor(125,125,0);
+				p3dLayer3->AddObject(pPolyhedron);
+
+				
+				sample_mold.push_back(pLine);
+				sample_mold_H.push_back(pPolyhedron);
+				Cu_sample.push_back(sample_Cu);
+				Zn_sample.push_back(sample_Zn);
+				S_sample.push_back(sample_S);
+				//添加字段
+				CString temp;
+
+				pField = p3dLayer3->GetField("勘探线编号");
+				bModified = FALSE;
+
+				if (!pField)
+				{
+					pField = new CGeoField("勘探线编号",GEO_STRING, 20,0,0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp.Format(line_ID);
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp.Empty();
+
+				pField = p3dLayer3->GetField("钻孔编号");
+				bModified = FALSE;
+
+				if (!pField)
+				{
+					pField = new CGeoField("钻孔编号",GEO_STRING, 20,0,0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp.Format(drill_ID);
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp.Empty();
+
+
+		        pField = p3dLayer3->GetField("测点号");
+				bModified = FALSE;
+
+				if (!pField)
+				{
+					pField = new CGeoField("测点号",GEO_INT, sizeof(int),0,0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp.Format("%d",point_ID);
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp.Empty();
+ 
+
+				pField = p3dLayer3->GetField("样品起始孔深");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("样品起始孔深",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp.Format("%lf",sample_SD);
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp.Empty();
+
+
+				pField = p3dLayer3->GetField("样品终止孔深");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("样品终止孔深",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp.Format("%lf",sample_ED);
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp.Empty();
+
+
+
+
+				pField = p3dLayer3->GetField("样品编号");
+				bModified = FALSE;
+
+				if (!pField)
+				{
+					pField = new CGeoField("样品编号",GEO_STRING, 20,0,0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp.Format(sample_ID);
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp.Empty();
+
+				CString temp1;
+				pField = p3dLayer3->GetField("X");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("X",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp1.Format("%lf",sample_EX);
+				pField->StrToVal(temp1,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp1,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp1.Empty();
+
+					pField = p3dLayer3->GetField("Y");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("Y",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp1.Format("%lf",sample_EY);
+				pField->StrToVal(temp1,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp1,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp1.Empty();
+
+					pField = p3dLayer3->GetField("Z");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("Z",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp1.Format("%lf",sample_EZ);
+				pField->StrToVal(temp1,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp1,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp1.Empty();
+
+
+
+
+				pField = p3dLayer3->GetField("样品长度");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("样品长度",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp.Format("%lf",sample_L);
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp.Empty();
+
+				pField = p3dLayer3->GetField("铜品位");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("铜品位",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp.Format("%lf",sample_Cu);
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp.Empty();
+
+				pField = p3dLayer3->GetField("锌品位");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("锌品位",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp.Format("%lf",sample_Zn);
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp.Empty();
+
+				pField = p3dLayer3->GetField("硫品位");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("硫品位",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer3->AddField(pField);	
+				}
+				temp.Format("%lf",sample_S);
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pLine));
+				pField->StrToVal(temp,p3dLayer3->GetObjIndex(pPolyhedron));
+				temp.Empty();
+				//
+				
+				pLine=new CGV3dPolyline;
+				//pPolyhedron=new CGV3dPolyhedron;
+				pSubset_0406_INFO->MoveNext();
+				continue;
+			}
+
+			
+
+			last_point_D=point_D;
+			last_point_ORIENTATION=point_ORIENTATION;
+			last_point_SKEW=point_SKEW;
+			last_Point[0]=point_X;
+			last_Point[1]=point_Y;
+			last_Point[2]=point_Z;
+			pSubset_0202->MoveNext();
+			//处理最后一个测点与钻孔末端间的最后一段间的样品
+		//	if (pSubset_0202->IsEOF())
+		//	{
+		//		while (!pSubset_0406_INFO->IsEOF())
+		//		{
+		//			double point_X=last_Point[0]+(drill_ED-last_point_D)*Sinf(last_point_SKEW)*Sinf(last_point_ORIENTATION);
+		//			double point_Y=last_Point[1]+(drill_ED-last_point_D)*Sinf(last_point_SKEW)*Cosf(last_point_ORIENTATION);
+		//			double point_Z=last_Point[2]-(drill_ED-last_point_D)*Cosf(last_point_SKEW);
+		//			//判断样品段起点是否在该测点与上一测点之间
+		//			if (last_point_D<sample_SD&&sample_SD<=drill_ED)
+		//			{
+		//				
+		//				pLine=new CGV3dPolyline();
+		//				double sample_SX=last_Point[0]-((sample_SD-last_point_D)/(point_D-last_point_D))*(last_Point[0]-point_X);
+		//				double sample_SY=last_Point[1]-((sample_SD-last_point_D)/(point_D-last_point_D))*(last_Point[1]-point_Y);
+		//				double sample_SZ=last_Point[2]-((sample_SD-last_point_D)/(point_D-last_point_D))*(last_Point[2]-point_Z);
+		//				pLine->AddHead(sample_SX,sample_SY,sample_SZ);
+		//			}
+
+		//			//判断是否在样品段之间
+		//			if (point_D>sample_SD&&drill_ED<=sample_ED)
+		//			{
+		//				pLine->AddTail(point_X,point_Y,point_Z);
+		//			}
+
+		//			//判断样品段终点是否在该测点与上一测点之间
+		//			if (last_point_D<sample_ED&&sample_ED<=drill_ED)
+		//			{
+		//				double sample_EX=last_Point[0]-((sample_ED-last_point_D)/(point_D-last_point_D))*(last_Point[0]-point_X);
+		//				double sample_EY=last_Point[1]-((sample_ED-last_point_D)/(point_D-last_point_D))*(last_Point[1]-point_Y);
+		//				double sample_EZ=last_Point[2]-((sample_ED-last_point_D)/(point_D-last_point_D))*(last_Point[2]-point_Z);
+		//				pLine->AddTail(sample_EX,sample_EY,sample_EZ);
+		//				pLine->SetWidth(3);
+		//				pLine->SetColor(0,255,0);
+		//				p3dLayer3->AddObject(pLine);
+
+		//				//添加字段
+
+		//				//
+
+		//				//pLine=new CGV3dPolyline;
+		//				pSubset_0406_INFO->MoveNext();
+		//				if (pSubset_0406_INFO->IsEOF())
+		//				{
+		//					break;
+		//				}
+
+		//				pSubset_0406_INFO->GetFieldValue("PKHFB（样品编号）",sample_ID);
+		//				pSubset_0406_INFO->GetFieldValue("TKACCF（样品起始深度）",sample_SD);
+		//				pSubset_0406_INFO->GetFieldValue("TKACCG（样品终止深度）",sample_ED);
+		//				pSubset_0406_INFO->GetFieldValue("GCLCAA（样品长度）",sample_L);
+		//				pSubset_0406_INFO->GetFieldValue("HXD001（铜品位）",sample_Cu);
+		//				pSubset_0406_INFO->GetFieldValue("HXD002（锌品位）",sample_Zn);
+		//				pSubset_0406_INFO->GetFieldValue("HXD003（硫品位）",sample_S);
+		//				
+		//			}
+		//		}
+		//	}
+
+		}
+		pSubset_0401->MoveNext();
+	}	
+	
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	////建立样品线模型
+	//重置指针
+	pSubset_0202->Close();
+	pSubset_0401->Close();
+	pSubset_0402->Close();
+	pSubset_0202 = new CADORecordset(ppDatabase);
+	pSubset_0401 = new CADORecordset(ppDatabase);
+	//新建图层
+	CGV3dLayer* p3dLayer4=new CGV3dLayer;
+	p3dLayer4->SetName("样品线模型");
+	//CGV3dDocument *p3dDoc=GetDocument();
+	//ASSERT(p3dDoc);
+	//CGV3dProject* p3dPrj = &(p3dDoc->m_Project);
+	//ASSERT(p3dPrj);
+	//CGV3dMap* p3dMap = p3dPrj->GetCurrentMap();
+	p3dMap->AddLayer(p3dLayer4);
+	p3dPrj->SetCurrentLayer(p3dLayer4);
+
+	//建模
+	m_SQL.Format("select * from DMZK0401");
+	if(!pSubset_0401->Open(m_SQL,CADORecordset::openUnknown))
+		return;
+	while (!pSubset_0401->IsEOF())
+	{
+		CString block_ID;//勘探区编号
+		CString drill_ID;//钻孔编号
+		CString line_ID;//勘探线编号
+		double drill_SX;//X坐标
+		double drill_SY;//Y坐标
+		double drill_SZ;//Z坐标
+		double drill_ED;//终孔深度
+
+		pSubset_0401->GetFieldValue("MDBTAD（勘探区编号）", block_ID);
+		pSubset_0401->GetFieldValue("GCJCBN（钻孔编号）", drill_ID);
+		pSubset_0401->GetFieldValue("PKGDCA（勘探线编号）", line_ID);
+		pSubset_0401->GetFieldValue("TKCAF（X坐标）", drill_SX);
+		pSubset_0401->GetFieldValue("TKCAG（Y坐标）", drill_SY);
+		pSubset_0401->GetFieldValue("TKCAI（Z坐标）", drill_SZ);
+		pSubset_0401->GetFieldValue("GGHHAB（终孔深度）", drill_ED);
+
+
+		POINT3d drill_SPoint;
+		drill_SPoint[0]=drill_SX;
+		drill_SPoint[1]=drill_SY;
+		drill_SPoint[2]=drill_SZ;
+		CGV3dPolyline *pLine;
+		CGV3dPolyhedron *pPolyhedron;
+		//pLine->AddHead(drill_SPoint[0],drill_SPoint[1],drill_SPoint[2]);
+
+		POINT3d last_Point={drill_SPoint[0],drill_SPoint[1],drill_SPoint[2]};
+		double last_point_D=0;
+		double last_point_SKEW=0;
+		double last_point_ORIENTATION=0;
+
+		CString m_SQL2;
+		m_SQL2.Format("select * from DMZK0202 where [GCJCBN(钻孔编号)]=\'%s\' order by [WTHEBA(测点深度)] asc",drill_ID);
+		//m_SQL2.Format("select * from DMZK0202 where [GCJCBN(钻孔编号)]=\'JZK1306\' order by [WTHEBA(测点深度)] asc");
+		if(!pSubset_0202->Open(m_SQL2,CADORecordset::openUnknown))
+			return;
+
+		CString m_SQL3;
+		m_SQL3.Format("select * from [DMZK0406-INFO] where [GCJCBN（钻孔编号）]=\'%s\' order by [TKACCF（样品起始深度）] asc",drill_ID);
+		//m_SQL3.Format("select * from [DMZK0406-INFO] where [GCJCBN（钻孔编号）]=\'JZK1306\' order by [TKACCF（样品起始深度）] asc");
+		if(!pSubset_0406_INFO->Open(m_SQL3,CADORecordset::openUnknown))
+			return;
+
+		while (!pSubset_0202->IsEOF()&&(!pSubset_0406_INFO->IsEOF()))
+		{
+			//读测斜表
+			int point_ID;
+			double point_D;
+			double point_SKEW=0;
+			double point_ORIENTATION=0;
+			pSubset_0202->GetFieldValue("WTJDIH(测点号)", point_ID);
+			pSubset_0202->GetFieldValue("WTHEBA(测点深度)", point_D);
+			pSubset_0202->GetFieldValue("WTHGFC(偏斜角采用值)", point_SKEW);
+			pSubset_0202->GetFieldValue("WTHGFF(方位角采用值)", point_ORIENTATION);
+			//读样品表
+			CString sample_ID;
+			double sample_SD;
+			double sample_ED;
+			double sample_L;
+			double sample_Cu=0;
+			double sample_Zn=0;
+			double sample_S=0;
+			pSubset_0406_INFO->GetFieldValue("PKHFB（样品编号）",sample_ID);
+			pSubset_0406_INFO->GetFieldValue("TKACCF（样品起始深度）",sample_SD);
+			pSubset_0406_INFO->GetFieldValue("TKACCG（样品终止深度）",sample_ED);
+			pSubset_0406_INFO->GetFieldValue("GCLCAA（样品长度）",sample_L);
+			pSubset_0406_INFO->GetFieldValue("HXD001（铜品位）",sample_Cu);
+			pSubset_0406_INFO->GetFieldValue("HXD002（锌品位）",sample_Zn);
+			pSubset_0406_INFO->GetFieldValue("HXD003（硫品位）",sample_S);
+
+			if (point_D==0)
+			{
+				last_point_D=0;
+				last_point_ORIENTATION=point_ORIENTATION;
+				last_point_SKEW=point_SKEW;
+				pSubset_0202->MoveNext();
+				continue;
+			}
+			//计算测点坐标
+			double point_X=last_Point[0];
+			double point_Y=last_Point[1];
+			double point_Z=last_Point[2]-(point_D-last_point_D);
+			//判断样品段起点是否在该测点与上一测点之间
+			if (last_point_D<sample_SD&&sample_SD<=point_D)
+			{
+				pLine=new CGV3dPolyline();
+				double sample_SX=last_Point[0];
+				double sample_SY=last_Point[1];
+				double sample_SZ=last_Point[2]-(sample_SD-last_point_D);
+				pLine->AddHead(sample_SX,sample_SY,sample_SZ);
+			}
+			//判断是否在样品段之间
+			if (point_D>sample_SD&&point_D<=sample_ED)
+			{
+				pLine->AddTail(point_X,point_Y,point_Z);
+			}
+			//判断样品段终点是否在该测点与上一测点之间
+			if (last_point_D<sample_ED&&sample_ED<=point_D)
+			{
+				double sample_EX=last_Point[0];
+				double sample_EY=last_Point[1];
+				double sample_EZ=last_Point[2]-(sample_ED-last_point_D);
+				pLine->AddTail(sample_EX,sample_EY,sample_EZ);
+				pLine->SetWidth(3);
+				pLine->SetColor(0,255,0);
+				p3dLayer4->AddObject(pLine);
+				
+				
+				sample_mold.push_back(pLine);
+				
+				Cu_sample.push_back(sample_Cu);
+				Zn_sample.push_back(sample_Zn);
+				S_sample.push_back(sample_S);
+				//添加字段
+				CString temp;
+
+				pField = p3dLayer4->GetField("勘探线编号");
+				bModified = FALSE;
+
+				if (!pField)
+				{
+					pField = new CGeoField("勘探线编号",GEO_STRING, 20,0,0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp.Format(line_ID);
+				pField->StrToVal(temp,p3dLayer4->GetObjIndex(pLine));
+				temp.Empty();
+
+				pField = p3dLayer4->GetField("钻孔编号");
+				bModified = FALSE;
+
+				if (!pField)
+				{
+					pField = new CGeoField("钻孔编号",GEO_STRING, 20,0,0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp.Format(drill_ID);
+				pField->StrToVal(temp,p3dLayer4->GetObjIndex(pLine));
+				
+				temp.Empty();
+
+
+		        pField = p3dLayer4->GetField("测点号");
+				bModified = FALSE;
+
+				if (!pField)
+				{
+					pField = new CGeoField("测点号",GEO_INT, sizeof(int),0,0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp.Format("%d",point_ID);
+				pField->StrToVal(temp,p3dLayer4->GetObjIndex(pLine));
+			
+				temp.Empty();
+ 
+
+				pField = p3dLayer4->GetField("样品起始孔深");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("样品起始孔深",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp.Format("%lf",sample_SD);
+				pField->StrToVal(temp,p3dLayer4->GetObjIndex(pLine));
+				
+				temp.Empty();
+
+
+				pField = p3dLayer4->GetField("样品终止孔深");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("样品终止孔深",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp.Format("%lf",sample_ED);
+				pField->StrToVal(temp,p3dLayer4->GetObjIndex(pLine));
+				
+				temp.Empty();
+
+
+
+
+				pField = p3dLayer4->GetField("样品编号");
+				bModified = FALSE;
+
+				if (!pField)
+				{
+					pField = new CGeoField("样品编号",GEO_STRING, 20,0,0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp.Format(sample_ID);
+				pField->StrToVal(temp,p3dLayer4->GetObjIndex(pLine));
+		
+				temp.Empty();
+
+				CString temp1;
+				pField = p3dLayer4->GetField("X");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("X",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp1.Format("%lf",sample_EX);
+				pField->StrToVal(temp1,p3dLayer4->GetObjIndex(pLine));
+		
+				temp1.Empty();
+
+					pField = p3dLayer4->GetField("Y");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("Y",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp1.Format("%lf",sample_EY);
+				pField->StrToVal(temp1,p3dLayer4->GetObjIndex(pLine));
+			
+				temp1.Empty();
+
+					pField = p3dLayer4->GetField("Z");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("Z",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp1.Format("%lf",sample_EZ);
+				pField->StrToVal(temp1,p3dLayer4->GetObjIndex(pLine));
+			
+				temp1.Empty();
+
+
+
+
+				pField = p3dLayer4->GetField("样品长度");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("样品长度",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp.Format("%lf",sample_L);
+				pField->StrToVal(temp,p3dLayer4->GetObjIndex(pLine));
+			
+				temp.Empty();
+
+				pField = p3dLayer4->GetField("铜品位");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("铜品位",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp.Format("%lf",sample_Cu);
+				pField->StrToVal(temp,p3dLayer4->GetObjIndex(pLine));
+				
+				temp.Empty();
+
+				pField = p3dLayer4->GetField("锌品位");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("锌品位",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp.Format("%lf",sample_Zn);
+				pField->StrToVal(temp,p3dLayer4->GetObjIndex(pLine));
+			
+				temp.Empty();
+
+				pField = p3dLayer4->GetField("硫品位");
+				bModified = FALSE;
+				if (!pField)
+				{
+					pField = new CGeoField("硫品位",GEO_DOUBLE, sizeof(double),sizeof(double),0);
+					p3dLayer4->AddField(pField);	
+				}
+				temp.Format("%lf",sample_S);
+				pField->StrToVal(temp,p3dLayer4->GetObjIndex(pLine));
+			
+				temp.Empty();
+				//
+				
+				pLine=new CGV3dPolyline;
+				//pPolyhedron=new CGV3dPolyhedron;
+				pSubset_0406_INFO->MoveNext();
+				continue;
+			}
+
+			
+
+			last_point_D=point_D;
+			last_point_ORIENTATION=point_ORIENTATION;
+			last_point_SKEW=point_SKEW;
+			last_Point[0]=point_X;
+			last_Point[1]=point_Y;
+			last_Point[2]=point_Z;
+			pSubset_0202->MoveNext();
+			//处理最后一个测点与钻孔末端间的最后一段间的样品
+		//	if (pSubset_0202->IsEOF())
+		//	{
+		//		while (!pSubset_0406_INFO->IsEOF())
+		//		{
+		//			double point_X=last_Point[0]+(drill_ED-last_point_D)*Sinf(last_point_SKEW)*Sinf(last_point_ORIENTATION);
+		//			double point_Y=last_Point[1]+(drill_ED-last_point_D)*Sinf(last_point_SKEW)*Cosf(last_point_ORIENTATION);
+		//			double point_Z=last_Point[2]-(drill_ED-last_point_D)*Cosf(last_point_SKEW);
+		//			//判断样品段起点是否在该测点与上一测点之间
+		//			if (last_point_D<sample_SD&&sample_SD<=drill_ED)
+		//			{
+		//				
+		//				pLine=new CGV3dPolyline();
+		//				double sample_SX=last_Point[0]-((sample_SD-last_point_D)/(point_D-last_point_D))*(last_Point[0]-point_X);
+		//				double sample_SY=last_Point[1]-((sample_SD-last_point_D)/(point_D-last_point_D))*(last_Point[1]-point_Y);
+		//				double sample_SZ=last_Point[2]-((sample_SD-last_point_D)/(point_D-last_point_D))*(last_Point[2]-point_Z);
+		//				pLine->AddHead(sample_SX,sample_SY,sample_SZ);
+		//			}
+
+		//			//判断是否在样品段之间
+		//			if (point_D>sample_SD&&drill_ED<=sample_ED)
+		//			{
+		//				pLine->AddTail(point_X,point_Y,point_Z);
+		//			}
+
+		//			//判断样品段终点是否在该测点与上一测点之间
+		//			if (last_point_D<sample_ED&&sample_ED<=drill_ED)
+		//			{
+		//				double sample_EX=last_Point[0]-((sample_ED-last_point_D)/(point_D-last_point_D))*(last_Point[0]-point_X);
+		//				double sample_EY=last_Point[1]-((sample_ED-last_point_D)/(point_D-last_point_D))*(last_Point[1]-point_Y);
+		//				double sample_EZ=last_Point[2]-((sample_ED-last_point_D)/(point_D-last_point_D))*(last_Point[2]-point_Z);
+		//				pLine->AddTail(sample_EX,sample_EY,sample_EZ);
+		//				pLine->SetWidth(3);
+		//				pLine->SetColor(0,255,0);
+		//				p3dLayer3->AddObject(pLine);
+
+		//				//添加字段
+
+		//				//
+
+		//				//pLine=new CGV3dPolyline;
+		//				pSubset_0406_INFO->MoveNext();
+		//				if (pSubset_0406_INFO->IsEOF())
+		//				{
+		//					break;
+		//				}
+
+		//				pSubset_0406_INFO->GetFieldValue("PKHFB（样品编号）",sample_ID);
+		//				pSubset_0406_INFO->GetFieldValue("TKACCF（样品起始深度）",sample_SD);
+		//				pSubset_0406_INFO->GetFieldValue("TKACCG（样品终止深度）",sample_ED);
+		//				pSubset_0406_INFO->GetFieldValue("GCLCAA（样品长度）",sample_L);
+		//				pSubset_0406_INFO->GetFieldValue("HXD001（铜品位）",sample_Cu);
+		//				pSubset_0406_INFO->GetFieldValue("HXD002（锌品位）",sample_Zn);
+		//				pSubset_0406_INFO->GetFieldValue("HXD003（硫品位）",sample_S);
+		//				
+		//			}
+		//		}
+		//	}
+
+		}
+		pSubset_0401->MoveNext();
+	}	
+}
